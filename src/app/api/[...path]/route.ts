@@ -20,7 +20,7 @@ export async function GET(request: NextRequest, context: Params): Promise<Respon
   try {
     const parts = (await context.params).path;
     if (parts[0] === "config") return NextResponse.json({ hasApiKey: hasApiKey(), model: "deepseek-flash" });
-    if (parts[0] === "sessions" && parts.length === 1) return NextResponse.json((await listSessions()).map(({ id, title, workspace, createdAt, updatedAt }) => ({ id, title, workspace, createdAt, updatedAt })));
+    if (parts[0] === "sessions" && parts.length === 1) return NextResponse.json((await listSessions()).map(({ id, title, workspace, createdAt, updatedAt, messages }) => ({ id, title, workspace, createdAt, updatedAt, hasMessages: messages.some((message) => message.role === "user") })));
     if (parts[0] === "sessions" && parts.length === 2) {
       const session = await getSession(parts[1]);
       if (!session) return jsonError("会话不存在", 404);
