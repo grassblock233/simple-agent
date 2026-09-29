@@ -1,5 +1,5 @@
 import { loadImage } from "./store";
-import type { ChatMessage, ImageRef, ToolCall } from "./types";
+import type { ChatMessage, ImageRef, ReasoningEffort, ToolCall } from "./types";
 
 let runtimeKey = "";
 export function setRuntimeKey(value: string): void { runtimeKey = value.trim(); }
@@ -61,9 +61,9 @@ async function request(body: object, signal: AbortSignal): Promise<Response> {
 }
 
 export type ModelDelta = { content?: string; reasoning?: string };
-export async function streamModel(messages: ChatMessage[], thinking: boolean, signal: AbortSignal, onDelta: (delta: ModelDelta) => void, summary = "", extraInstruction = ""): Promise<ChatMessage & { role: "assistant" }> {
+export async function streamModel(messages: ChatMessage[], reasoningEffort: ReasoningEffort, signal: AbortSignal, onDelta: (delta: ModelDelta) => void, summary = "", extraInstruction = ""): Promise<ChatMessage & { role: "assistant" }> {
   const system = `你是本地代码生成 Agent。工作区由系统提供，先检查现有文件再修改。主动运行测试验证改动，失败后按错误修复，最多按设置重试。不要宣称未实际执行的命令已通过。工具失败时换策略或解释原因。最终用中文简述改动文件、原因、验证命令和结果。Shell 命令需要用户批准，拒绝后尊重决定。${summary ? `\n较早会话摘要：\n${summary}` : ""}${extraInstruction ? `\n${extraInstruction}` : ""}`;
-  const response = await request({ model: "deepseek-flash", messages: [{ role: "system", content: system }, ...await providerMessages(messages)], tools: toolDefinitions, thinking: { type: thinking ? "enabled" : "disabled" }, stream: true }, signal);
+  const response = await request({ model: "deepseek-flash", messages: [{ role: "system", content: system }, ...await providerMessages(messages)], tools: toolDefinitions, thinking: { type: reasoningEffort === "off" ? "disabled" : "enabled" }, ...(reasoningEffort === "off" ? {} : { reasoning_effort: reasoningEffort }), stream: true }, signal);
   if (!response.body) throw new Error("模型服务没有返回流式响应");
   const reader = response.body.getReader();
   const decoder = new TextDecoder();

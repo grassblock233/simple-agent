@@ -97,12 +97,11 @@ export async function runAgent(sessionId: string, text: string, images: ImageRef
       let failedChecks = 0;
       let dirty = false;
       let verificationPrompted = false;
-      let toolRounds = 0;
-      while (!run.controller.signal.aborted && toolRounds < session.settings.maxToolRounds) {
+      while (!run.controller.signal.aborted) {
         await maybeCompact(session, run.controller.signal, (event) => emit({ type: "event", event }));
         const occupancy = estimateTokens(session.messages.slice(session.contextStart), session.summary) / contextBudget();
         emit({ type: "status", status: "模型生成中", occupancy });
-        const assistant = await streamModel(session.messages.slice(session.contextStart), session.settings.thinking, run.controller.signal, (delta) => {
+        const assistant = await streamModel(session.messages.slice(session.contextStart), session.settings.reasoningEffort, run.controller.signal, (delta) => {
           if (delta.content) emit({ type: "delta", field: "answer", text: delta.content });
           if (delta.reasoning) emit({ type: "delta", field: "reasoning", text: delta.reasoning });
         }, session.summary, dirty ? "代码已写入但仍未验证。请尝试运行合适的测试或明确说明无法运行。" : "");
@@ -116,7 +115,6 @@ export async function runAgent(sessionId: string, text: string, images: ImageRef
           if (dirty) await append(session, makeEvent("notice", { text: "文件已修改，但没有成功的验证命令；请检查最终回答中的限制。", status: "failed" }), emit);
           break;
         }
-        toolRounds++;
         const results: { role: "tool"; tool_call_id: string; content: string }[] = [];
         for (const call of assistant.tool_calls) {
           const result = await executeCall(call, run, session, reads, emit);
@@ -137,7 +135,6 @@ export async function runAgent(sessionId: string, text: string, images: ImageRef
           break;
         }
       }
-      if (toolRounds >= session.settings.maxToolRounds) await append(session, makeEvent("notice", { text: "工具轮数达到上限，任务已停止。", status: "failed" }), emit);
       if (run.controller.signal.aborted) await append(session, makeEvent("notice", { text: "已停止生成。已完成的工具结果保留，未完成的模型输出未加入后续上下文。" }), emit);
       emit({ type: "status", status: "就绪", occupancy: estimateTokens(session.messages.slice(session.contextStart), session.summary) / contextBudget() });
     });

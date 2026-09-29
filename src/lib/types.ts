@@ -5,7 +5,8 @@ export type ChatMessage =
   | { role: "assistant"; content: string | null; reasoning_content?: string | null; tool_calls?: ToolCall[] }
   | { role: "tool"; tool_call_id: string; content: string };
 
-export type SessionSettings = { thinking: boolean; maxAttempts: number; maxToolRounds: number; compression: boolean; threshold: number };
+export type ReasoningEffort = "off" | "low" | "high" | "max";
+export type SessionSettings = { reasoningEffort: ReasoningEffort; maxAttempts: number; compression: boolean; threshold: number };
 export type Event = {
   id: string;
   at: string;

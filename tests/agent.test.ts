@@ -82,7 +82,7 @@ test("uploaded image becomes a vision block in the model request", async () => {
   };
   setRuntimeKey("test-key");
   try {
-    const response = await streamModel([{ role: "user", content: "描述图片", images: [{ id, mime: "image/png", name: "sample.png" }] }], true, new AbortController().signal, () => {});
+    const response = await streamModel([{ role: "user", content: "描述图片", images: [{ id, mime: "image/png", name: "sample.png" }] }], "high", new AbortController().signal, () => {});
     assert.equal(response.content, "一张图片");
     const user = request.messages?.[1]?.content as { image_url?: { url: string } }[];
     assert.match(user[1].image_url?.url || "", /^data:image\/png;base64,/);
@@ -91,6 +91,24 @@ test("uploaded image becomes a vision block in the model request", async () => {
     setRuntimeKey("");
     await rm(imagePath(id), { force: true });
   }
+});
+
+test("reasoning effort maps to DeepSeek request fields", async () => {
+  const originalFetch = globalThis.fetch;
+  const requests: Array<{ thinking: { type: string }; reasoning_effort?: string }> = [];
+  globalThis.fetch = async (_input, init) => {
+    requests.push(JSON.parse(String(init?.body)));
+    return sse([{ content: "完成" }]);
+  };
+  setRuntimeKey("test-key");
+  try {
+    for (const level of ["off", "low", "high", "max"] as const) {
+      await streamModel([{ role: "user", content: "测试" }], level, new AbortController().signal, () => {});
+    }
+    assert.deepEqual(requests.map(({ thinking, reasoning_effort }) => [thinking.type, reasoning_effort]), [
+      ["disabled", undefined], ["enabled", "low"], ["enabled", "high"], ["enabled", "max"],
+    ]);
+  } finally { globalThis.fetch = originalFetch; setRuntimeKey(""); }
 });
 
 function sse(deltas: object[]): Response {
@@ -169,5 +187,29 @@ test("stop during approval preserves a paired tool result", async () => {
     setRuntimeKey("");
     await deleteSession(session.id);
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("agent continues beyond the former tool round limit", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "simple-agent-rounds-"));
+  const session = await createSession(root);
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = async () => {
+    calls++;
+    return calls <= 17
+      ? sse([{ tool_calls: [{ index: 0, id: `call-${calls}`, function: { name: "list_directory", arguments: '{"path":"."}' } }] }])
+      : sse([{ content: "完成" }]);
+  };
+  setRuntimeKey("test-key");
+  try {
+    await runAgent(session.id, "检查目录", [], () => {});
+    const saved = await getSession(session.id);
+    assert.equal(calls, 18);
+    assert.equal(saved?.messages.filter((message) => message.role === "tool").length, 17);
+    assert.ok(saved?.events.some((event) => event.type === "answer" && event.text === "完成"));
+  } finally {
+    globalThis.fetch = originalFetch; setRuntimeKey("");
+    await deleteSession(session.id); await rm(root, { recursive: true, force: true });
   }
 });

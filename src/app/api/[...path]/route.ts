@@ -4,6 +4,7 @@ import path from "node:path";
 import { NextRequest, NextResponse } from "next/server";
 import { isRunning, resolveApproval, runAgent, stopRun } from "@/lib/agent";
 import { detectImage, MAX_IMAGE_BYTES, validateImage } from "@/lib/files";
+import { gitStatus } from "@/lib/git";
 import { estimateTokens, hasApiKey, setRuntimeKey } from "@/lib/model";
 import { checkOrigin } from "@/lib/origin";
 import { contextBudget, createSession, deleteSession, getSession, imagePath, listSessions, saveImage, saveSession } from "@/lib/store";
@@ -36,7 +37,12 @@ export async function GET(request: NextRequest, context: Params): Promise<Respon
         }
         if (interrupted) await saveSession(session);
       }
-      return NextResponse.json({ ...session, running, occupancy: estimateTokens(session.messages.slice(session.contextStart), session.summary) / contextBudget() });
+      return NextResponse.json({ ...session, running, occupancy: estimateTokens(session.messages.slice(session.contextStart), session.summary) / contextBudget(), contextBudget: contextBudget() });
+    }
+    if (parts[0] === "git" && parts[1] === "status") {
+      const workspace = request.nextUrl.searchParams.get("workspace");
+      if (!workspace) throw new Error("缺少工作目录");
+      return NextResponse.json(await gitStatus(workspace));
     }
     if (parts[0] === "fs" && parts[1] === "browse") {
       const directory = path.resolve(request.nextUrl.searchParams.get("path") || process.cwd());
@@ -122,10 +128,9 @@ export async function PATCH(request: NextRequest, context: Params): Promise<Resp
     const session = await getSession(parts[1]);
     if (!session) return jsonError("会话不存在", 404);
     const body = await request.json() as Partial<SessionSettings>;
-    if (typeof body.thinking === "boolean") session.settings.thinking = body.thinking;
+    if (["off", "low", "high", "max"].includes(body.reasoningEffort || "")) session.settings.reasoningEffort = body.reasoningEffort!;
     if (typeof body.compression === "boolean") session.settings.compression = body.compression;
     if (typeof body.maxAttempts === "number" && Number.isInteger(body.maxAttempts)) session.settings.maxAttempts = Math.max(1, Math.min(10, body.maxAttempts));
-    if (typeof body.maxToolRounds === "number" && Number.isInteger(body.maxToolRounds)) session.settings.maxToolRounds = Math.max(1, Math.min(40, body.maxToolRounds));
     if (typeof body.threshold === "number") session.settings.threshold = Math.max(0.1, Math.min(0.95, body.threshold));
     await saveSession(session);
     return NextResponse.json(session);

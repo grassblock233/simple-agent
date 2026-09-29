@@ -47,7 +47,18 @@ export async function validateWorkspace(input: string): Promise<string> {
   return resolved;
 }
 
-const defaults: SessionSettings = { thinking: true, maxAttempts: 3, maxToolRounds: 16, compression: true, threshold: 0.75 };
+const defaults: SessionSettings = { reasoningEffort: "high", maxAttempts: 3, compression: true, threshold: 0.75 };
+
+function normalizeSettings(value: Partial<SessionSettings> & { thinking?: boolean }): SessionSettings {
+  const reasoningEffort = ["off", "low", "high", "max"].includes(value.reasoningEffort || "")
+    ? value.reasoningEffort! : value.thinking === false ? "off" : "high";
+  return {
+    reasoningEffort,
+    maxAttempts: value.maxAttempts ?? defaults.maxAttempts,
+    compression: value.compression ?? defaults.compression,
+    threshold: value.threshold ?? defaults.threshold,
+  };
+}
 
 function sessionFile(id: string): string {
   if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error("会话 ID 无效");
@@ -71,7 +82,11 @@ export async function saveSession(session: Session): Promise<void> {
 }
 
 export async function getSession(id: string): Promise<Session | null> {
-  try { return JSON.parse(await readFile(sessionFile(id), "utf8")) as Session; }
+  try {
+    const session = JSON.parse(await readFile(sessionFile(id), "utf8")) as Session & { settings: SessionSettings & { thinking?: boolean; maxToolRounds?: number } };
+    session.settings = normalizeSettings(session.settings);
+    return session;
+  }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
 }
 
