@@ -6,9 +6,10 @@ import { NextRequest, NextResponse } from "next/server";
 import { isRunning, resolveApproval, runAgent, stopRun } from "@/lib/agent";
 import { detectImage, MAX_IMAGE_BYTES, validateImage } from "@/lib/files";
 import { gitStatus } from "@/lib/git";
-import { estimateTokens, hasApiKey, setRuntimeKey } from "@/lib/model";
+import { DirectoryPickerBusyError, pickDirectory } from "@/lib/directory-picker";
+import { estimateTokens, hasApiKey } from "@/lib/model";
 import { checkOrigin } from "@/lib/origin";
-import { contextBudget, createSession, deleteSession, getAppSettings, getProject, getSession, imagePath, listProjects, listSessions, saveImage, saveSession, updateAppSettings, updateProject, updateSessionsForWorkspace, validateWorkspace } from "@/lib/store";
+import { contextBudget, createSession, deleteSession, getAppSettings, getProject, getSession, imagePath, listProjects, listSessions, saveImage, saveSession, saveStoredApiKey, updateAppSettings, updateProject, updateSessionsForWorkspace, validateWorkspace, withWorkspaceLock } from "@/lib/store";
 import type { ImageRef, LiveEvent, SessionSettings } from "@/lib/types";
 
 export const runtime = "nodejs";
@@ -22,7 +23,7 @@ export async function GET(request: NextRequest, context: Params): Promise<Respon
   try {
     const parts = (await context.params).path;
     if (parts[0] === "settings" && parts.length === 1) return NextResponse.json(await getAppSettings());
-    if (parts[0] === "config") return NextResponse.json({ hasApiKey: hasApiKey(), model: "deepseek-flash" });
+    if (parts[0] === "config") return NextResponse.json({ hasApiKey: await hasApiKey(), model: "deepseek-flash" });
     if (parts[0] === "sessions" && parts.length === 1) return NextResponse.json((await listSessions()).map(({ id, title, workspace, createdAt, updatedAt, messages, pinned, archived }) => ({ id, title, workspace, createdAt, updatedAt, pinned, archived, hasMessages: messages.some((message) => message.role === "user") })));
     if (parts[0] === "projects" && parts.length === 1) {
       const sessions = await listSessions();
@@ -71,11 +72,17 @@ export async function POST(request: NextRequest, context: Params): Promise<Respo
   try {
     checkOrigin(request.headers, request.nextUrl.protocol);
     const parts = (await context.params).path;
+    if (parts[0] === "fs" && parts[1] === "pick-directory" && parts.length === 2) {
+      const body = await request.json() as { initialPath?: unknown };
+      if (body.initialPath !== undefined && typeof body.initialPath !== "string") throw new Error("起始目录格式无效");
+      try { return NextResponse.json(await pickDirectory(body.initialPath, request.signal)); }
+      catch (error) { if (error instanceof DirectoryPickerBusyError) return jsonError(error, 409); throw error; }
+    }
     if (parts[0] === "config") {
       const body = await request.json() as { apiKey?: unknown };
       if (typeof body.apiKey !== "string") throw new Error("API Key 格式无效");
-      setRuntimeKey(body.apiKey);
-      return NextResponse.json({ hasApiKey: hasApiKey() });
+      await saveStoredApiKey(body.apiKey);
+      return NextResponse.json({ hasApiKey: await hasApiKey() });
     }
     if (parts[0] === "sessions" && parts.length === 1) {
       const body = await request.json() as { workspace?: unknown };
@@ -101,15 +108,27 @@ export async function POST(request: NextRequest, context: Params): Promise<Respo
     if (parts[0] === "projects" && parts.length === 1) {
       const body = await request.json() as { action?: unknown; workspace?: unknown; name?: unknown; pinned?: unknown };
       if (typeof body.workspace !== "string" || !body.workspace) throw new Error("缺少项目目录");
-      const workspace = await validateWorkspace(body.workspace);
       const action = body.action;
-      if (action === "rename") return NextResponse.json(await updateProject(workspace, { name: typeof body.name === "string" ? body.name : "" }));
-      if (action === "pin") return NextResponse.json(await updateProject(workspace, { pinned: body.pinned === true }));
-      if (action === "archive") return NextResponse.json({ ...(await getProject(workspace)), archived: await updateSessionsForWorkspace(workspace, { archived: true }) });
       if (action === "remove") {
+        if (!path.isAbsolute(body.workspace)) throw new Error("请输入工作目录的绝对路径");
+        const workspace = path.resolve(body.workspace);
         await updateSessionsForWorkspace(workspace, { archived: true });
         return NextResponse.json(await updateProject(workspace, { hidden: true }));
       }
+      const workspace = await validateWorkspace(body.workspace);
+      if (action === "create") {
+        if (typeof body.name !== "string" || !body.name.trim()) throw new Error("请输入项目名称");
+        const name = body.name.trim();
+        return NextResponse.json(await withWorkspaceLock(workspace, async () => {
+          const existing = (await listSessions()).find(session => session.workspace === workspace && !session.archived && !isRunning(session.id) && !session.messages.some(message => message.role === "user"));
+          const session = existing || await createSession(workspace);
+          const project = await updateProject(workspace, { name, hidden: false });
+          return { project, session };
+        }));
+      }
+      if (action === "rename") return NextResponse.json(await updateProject(workspace, { name: typeof body.name === "string" ? body.name : "" }));
+      if (action === "pin") return NextResponse.json(await updateProject(workspace, { pinned: body.pinned === true }));
+      if (action === "archive") return NextResponse.json({ ...(await getProject(workspace)), archived: await updateSessionsForWorkspace(workspace, { archived: true }) });
       if (action === "restore") {
         await updateSessionsForWorkspace(workspace, { archived: false });
         return NextResponse.json(await updateProject(workspace, { hidden: false }));

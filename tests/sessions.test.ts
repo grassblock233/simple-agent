@@ -1,10 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
-import { GET } from "../src/app/api/[...path]/route";
+import { GET, POST } from "../src/app/api/[...path]/route";
 import { createSession, deleteSession, getProject, getSession, listProjects, saveSession, updateProject, updateSessionsForWorkspace } from "../src/lib/store";
 
 test("session history stays hidden until the first user message", async () => {
@@ -52,4 +52,42 @@ test("project metadata and session archive state persist", async () => {
     assert.equal(await updateSessionsForWorkspace(workspace, { archived: true }), 1);
     assert.equal((await getSession(session.id))?.archived, true);
   } finally { await deleteSession(session.id); await rm(workspace, { recursive: true, force: true }); }
+});
+
+test("removing a project works after its directory disappears", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "simple-agent-remove-project-"));
+  const workspace = path.join(root, "missing-project");
+  await mkdir(workspace);
+  const first = await createSession(workspace);
+  const second = await createSession(workspace);
+  const other = await createSession(root);
+  const context = { params: Promise.resolve({ path: ["projects"] }) };
+  const act = (action: string, directory = workspace) => POST(new NextRequest("http://localhost/api/projects", {
+    method: "POST", headers: { origin: "http://localhost", host: "localhost", "content-type": "application/json" }, body: JSON.stringify({ action, workspace: directory }),
+  }), context);
+  try {
+    await updateProject(workspace, { name: "Missing project", pinned: true });
+    await rm(workspace, { recursive: true });
+    assert.equal((await act("remove", "relative/project")).status, 400);
+    assert.equal((await getProject(workspace)).hidden, false);
+    const response = await act("remove");
+    assert.equal(response.status, 200);
+    const removed = await response.json();
+    assert.equal(removed.workspace, workspace);
+    assert.equal(removed.hidden, true);
+    assert.equal(removed.name, "Missing project");
+    assert.equal((await getProject(workspace)).hidden, true);
+    assert.equal((await getSession(first.id))?.archived, true);
+    assert.equal((await getSession(second.id))?.archived, true);
+    assert.equal((await getSession(other.id))?.archived, false);
+    assert.equal((await act("remove")).status, 200);
+    assert.equal((await act("open")).status, 400);
+    const presentFile = path.join(root, "keep.txt");
+    await writeFile(presentFile, "keep");
+    assert.equal((await act("remove", root)).status, 200);
+    assert.equal(await readFile(presentFile, "utf8"), "keep");
+  } finally {
+    await deleteSession(first.id); await deleteSession(second.id); await deleteSession(other.id);
+    await rm(root, { recursive: true, force: true });
+  }
 });

@@ -1,20 +1,19 @@
 "use client";
 
 import { isValidElement, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { AlertCircle, ArrowDown, Check, ChevronDown, ChevronLeft, ChevronRight, Clipboard, Code2, FilePenLine, FileText, Folder, GitBranch, PanelLeft, Plus, RotateCcw, Search, Settings2, Square, Terminal, X } from "lucide-react";
+import { AlertCircle, ArrowDown, Check, ChevronDown, ChevronRight, Clipboard, Code2, FilePenLine, FileText, Folder, GitBranch, PanelLeft, Plus, Search, Settings2, Square, Terminal, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import SidebarList from "./sidebar-list";
 import SettingsWorkbench from "./settings-workbench";
+import EffortControl, { effortLabels } from "./effort-control";
+import CreateProjectDialog from "./create-project-dialog";
 import type { CSSProperties } from "react";
 import { sidebarDrag } from "@/lib/sidebar";
 import type { Event, ImageRef, LiveEvent, Project, ReasoningEffort, Session, SessionSettings } from "@/lib/types";
 
 type SessionItem = Pick<Session, "id" | "title" | "workspace" | "createdAt" | "updatedAt" | "pinned" | "archived"> & { hasMessages: boolean };
-type BrowserState = { path: string; parent: string; entries: string[] };
 type GitStatus = { isRepository: boolean; branch: string; branches: string[]; changedFiles: number };
-const effortLevels: ReasoningEffort[] = ["off", "low", "high", "max"];
-const effortLabels: Record<ReasoningEffort, string> = { off: "关闭", low: "低", high: "高", max: "最大" };
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init);
@@ -85,7 +84,6 @@ export default function Home() {
   const [projectQuery, setProjectQuery] = useState("");
   const [branchQuery, setBranchQuery] = useState("");
   const [gitInfo, setGitInfo] = useState<GitStatus | null>(null);
-  const [effortDraft, setEffortDraft] = useState(2);
   const [draftAnswer, setDraftAnswer] = useState("");
   const [draftReasoning, setDraftReasoning] = useState("");
   const [showSettings, setShowSettings] = useState(false);
@@ -105,8 +103,6 @@ export default function Home() {
   const [renameDraft, setRenameDraft] = useState("");
   const [latestProject, setLatestProject] = useState("");
   const [creating, setCreating] = useState(false);
-  const [browser, setBrowser] = useState<BrowserState | null>(null);
-  const [directory, setDirectory] = useState("");
   const [hasKey, setHasKey] = useState(false);
   const [error, setError] = useState("");
   const bottom = useRef<HTMLDivElement>(null);
@@ -246,13 +242,15 @@ export default function Home() {
   }, [composerMenu]);
   useEffect(() => {
     if (!composerMenu) return;
-    const close = (event: PointerEvent) => { if (!composerArea.current?.contains(event.target as Node)) setComposerMenu(null); };
+    const close = (event: PointerEvent) => {
+      const target = event.target as Element;
+      if (composerMenu === "effort" ? !target.closest(".effort-anchor") : !composerArea.current?.contains(target)) setComposerMenu(null);
+    };
     const escape = (event: KeyboardEvent) => { if (event.key === "Escape") { setComposerMenu(null); composerReturnFocus.current?.focus(); } };
     document.addEventListener("pointerdown", close);
     document.addEventListener("keydown", escape);
     return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("keydown", escape); };
   }, [composerMenu]);
-  useEffect(() => { if (selected) setEffortDraft(effortLevels.indexOf(selected.settings.reasoningEffort)); }, [selected?.id, selected?.settings.reasoningEffort]);
   useEffect(() => {
     if (!showSettings) return;
     return () => {
@@ -273,12 +271,6 @@ export default function Home() {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [showSettings]);
 
-  const browse = async (target?: string) => {
-    try {
-      const data = await api<BrowserState>(`/api/fs/browse?path=${encodeURIComponent(target || directory || ".")}`);
-      setBrowser(data); setDirectory(data.path); setError("");
-    } catch (cause) { setError(String(cause)); }
-  };
   const openSettings = () => {
     chatScroll.current = timeline.current?.scrollTop || 0;
     settingsReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -299,8 +291,7 @@ export default function Home() {
     } catch (cause) { setError(String(cause)); }
     finally { setCreating(false); }
   };
-  const newSession = () => { void createIn(directory.trim()); };
-  const openDirectoryPicker = () => { setSearchOpen(false); setShowNew(true); void browse(); };
+  const openDirectoryPicker = () => { setSearchOpen(false); setComposerMenu(null); setSidebarOpen(false); setShowNew(true); };
   const openNew = () => {
     const workspace = latestProjectRef.current || selected?.workspace || sessions[0]?.workspace;
     if (workspace) void createIn(workspace);
@@ -448,17 +439,17 @@ export default function Home() {
   };
 
   return <div className={`app-shell ${showSettings ? "show-settings" : ""}`}>
-    <aside aria-hidden={showSettings} inert={showSettings} className={`sidebar ${sidebarOpen ? "open" : ""} ${sidebarVisible ? "" : "desktop-collapsed"} ${resizingSidebar ? "resizing" : ""}`} style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
+    <aside aria-hidden={showSettings || showNew} inert={showSettings || showNew} className={`sidebar ${sidebarOpen ? "open" : ""} ${sidebarVisible ? "" : "desktop-collapsed"} ${resizingSidebar ? "resizing" : ""}`} style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
       <div className="brand"><div><strong>Simple Agent</strong></div><button className="icon-btn sidebar-search-toggle" title="搜索会话 (Ctrl+K)" aria-label="搜索会话" onClick={() => { setSearchOpen(true); setSearchQuery(""); setSearchIndex(0); }}><Search size={18} /></button><button className="icon-btn mobile-only" title="关闭侧栏" onClick={() => setSidebarOpen(false)}><X size={18} /></button></div>
       <button className="new-button" onClick={openNew} disabled={creating} title={latestProject ? `在 ${workspaceName(latestProject)} 中新建聊天` : "新建聊天"}><FilePenLine size={18} /> 新聊天</button>
-      <SidebarList projects={projects} sessions={historySessions} selectedId={selected?.id} collapsed={collapsedProjects} toggle={toggleProject} load={(id) => void load(id)} pinSession={(id, pinned) => void patchSessionMeta(id, { pinned })} removeSession={(id) => void removeSession(id)} action={projectAction} rename={beginRename} />
+      <SidebarList projects={projects} sessions={historySessions} selectedId={selected?.id} collapsed={collapsedProjects} toggle={toggleProject} load={(id) => void load(id)} pinSession={(id, pinned) => void patchSessionMeta(id, { pinned })} removeSession={(id) => void removeSession(id)} action={projectAction} rename={beginRename} createProject={openDirectoryPicker} />
       <div className="sidebar-footer"><span className={`status-dot ${hasKey ? "ready" : ""}`} />{hasKey ? "DeepSeek 已配置" : "等待配置 API Key"}</div>
       <div className="sidebar-resizer" role="separator" aria-label="调整侧边栏宽度" aria-orientation="vertical" aria-valuemin={0} aria-valuemax={520} aria-valuenow={sidebarWidth} tabIndex={0} onPointerDown={(event) => { event.preventDefault(); closingSidebarRef.current = false; setResizingSidebar(true); }} onKeyDown={(event) => {
         if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault(); resizeSidebar(sidebarWidthRef.current + (event.key === "ArrowRight" ? 20 : -20), true); }
         if (event.key === "Home") { event.preventDefault(); resizeSidebar(0, true); }
       }} />
     </aside>
-    <main className="main-pane" aria-hidden={showSettings} inert={showSettings}>
+    <main className="main-pane" aria-hidden={showSettings || showNew} inert={showSettings || showNew}>
       <header className="topbar"><button className="icon-btn sidebar-toggle" title="切换侧边栏" aria-label="切换侧边栏" onClick={toggleSidebar}><PanelLeft size={19} /></button><div className="topbar-title">{selected && <strong>{selected.title}</strong>}</div><div className="topbar-right"><button ref={settingsTrigger} className="icon-btn" title="设置" aria-label="设置" onClick={openSettings}><Settings2 size={18} /></button></div></header>
       {error && <div className="global-error"><AlertCircle size={17} />{error}<button title="关闭提示" onClick={() => setError("")}><X size={16} /></button></div>}
       <div className="timeline" ref={timeline}>
@@ -485,15 +476,8 @@ export default function Home() {
             <span className="composer-live-status" aria-live="polite">{busy ? status : ""}</span>
             <div className="context-meter" tabIndex={0} aria-label={`上下文容量：已用约 ${usedTokens.toLocaleString()} 标记，共 ${contextBudget.toLocaleString()} 标记，${percentUsed}% 已用`}><span className="context-ring" style={{ "--context-fill": `${Math.min(100, Math.max(0, percentUsed))}%` } as CSSProperties} /><div className="context-tooltip" role="tooltip"><span>背景信息窗口：</span><span>{percentUsed}% 已用</span><strong>已用 {usedTokens.toLocaleString()} 标记，共 {contextBudget.toLocaleString()}</strong></div></div>
             <div className="composer-menu-anchor effort-anchor">
-              <button ref={effortTrigger} className={`effort-button ${composerMenu === "effort" ? "active" : ""}`} aria-label={`思考强度：${effortLabels[selected.settings.reasoningEffort]}`} aria-expanded={composerMenu === "effort"} disabled={busy} onClick={(event) => toggleComposerMenu("effort", event.currentTarget)}>DeepSeek {effortLabels[selected.settings.reasoningEffort]}</button>
-              {composerMenu === "effort" && <div className="composer-popover effort-popover">
-                <div className="effort-heading"><strong>{effortLabels[effortLevels[effortDraft]]}</strong><span>deepseek-flash</span><button className="effort-reset" title="恢复默认思考强度" aria-label="恢复默认思考强度" disabled={busy || savingSettings} onClick={() => { setEffortDraft(2); setEffort("high"); }}><RotateCcw size={17} /></button></div>
-                <div className="effort-track" style={{ "--effort-fill": `${effortDraft / 3 * 100}%` } as CSSProperties}>
-                  <div className="effort-ticks" aria-hidden="true">{effortLevels.map((level) => <i key={level} />)}</div>
-                  <input className="effort-slider" type="range" min={0} max={3} step={1} value={effortDraft} aria-label="思考强度" aria-valuetext={effortLabels[effortLevels[effortDraft]]} aria-busy={savingSettings} disabled={busy} onChange={(event) => setEffortDraft(Number(event.target.value))} onPointerUp={(event) => setEffort(effortLevels[Number(event.currentTarget.value)])} onKeyUp={(event) => { if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) setEffort(effortLevels[Number(event.currentTarget.value)]); }} onBlur={(event) => setEffort(effortLevels[Number(event.currentTarget.value)])} />
-                </div>
-                {settingsFeedback?.kind === "error" && <p className="effort-error" role="alert">{settingsFeedback.message}</p>}
-              </div>}
+              <button ref={effortTrigger} className={`effort-button ${composerMenu === "effort" ? "active" : ""}`} aria-label={`思考强度：${effortLabels[selected.settings.reasoningEffort]}`} aria-haspopup="dialog" aria-expanded={composerMenu === "effort"} disabled={busy} onClick={(event) => toggleComposerMenu("effort", event.currentTarget)}>DeepSeek {effortLabels[selected.settings.reasoningEffort]}<ChevronDown size={12} /></button>
+              <EffortControl key={selected.id} open={composerMenu === "effort"} value={selected.settings.reasoningEffort} disabled={busy} saving={savingSettings} error={settingsFeedback?.kind === "error" ? settingsFeedback.message : undefined} onCommit={setEffort} />
             </div>
             {busy ? <button className="send-button stop" title="停止生成" aria-label="停止生成" onClick={() => void stop()}><Square size={16} /></button> : <button className="send-button" title="发送" aria-label="发送" disabled={!canSend} onClick={() => void send()}><ArrowDown className="send-arrow" size={18} /></button>}
           </div>
@@ -517,8 +501,6 @@ export default function Home() {
       </section>
     </div>
     {showSettings && <SettingsWorkbench initialCategory={settingsInitial} session={selected} sessions={sessions} projects={projectMeta} busy={busy} hasKey={hasKey} close={() => setShowSettings(false)} updated={value => setSelected(current => current?.id === value.id ? value : current)} restored={async () => { await refreshList(); const config = await api<{ hasApiKey: boolean }>("/api/config"); setHasKey(config.hasApiKey); }} />}
-    {showNew && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowNew(false); }}><div className="directory-modal"><div className="modal-head"><div><span className="eyebrow">工作区</span><h2>新建会话</h2></div><button className="icon-btn" title="关闭" onClick={() => setShowNew(false)}><X size={18} /></button></div><p>选择已有本机目录。文件工具仅在该目录内读写，Shell 命令逐条请求批准。</p><label htmlFor="directory-path">目录绝对路径</label><div className="path-row"><input id="directory-path" value={directory} onChange={(event) => setDirectory(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void browse(); }} placeholder="/home/user/project" /><button className="btn" onClick={() => void browse()}>浏览</button></div>{error && <div className="inline-error"><AlertCircle size={15} />{error}</div>}{browser && <div className="folder-list"><button onClick={() => void browse(browser.parent)}><ChevronLeft size={16} /> 上一级</button>{browser.entries.map((name) => <button key={name} onClick={() => void browse(pathJoin(browser.path, name))}><Folder size={16} />{name}<ChevronRight size={14} /></button>)}{browser.entries.length === 0 && <span className="muted">此目录没有子目录</span>}</div>}<div className="modal-actions"><button className="btn" onClick={() => setShowNew(false)}>取消</button><button className="btn primary" disabled={!directory.trim()} onClick={() => void newSession()}><Check size={16} /> 使用此目录</button></div></div></div>}
+    <CreateProjectDialog open={showNew} initialPath={selected?.workspace || latestProject || undefined} onClose={() => setShowNew(false)} onCreated={async ({ session }) => { await refreshList(); await load(session.id); setText(""); setImages([]); setError(""); }} />
   </div>;
 }
-
-function pathJoin(parent: string, name: string): string { return `${parent.replace(/\/$/, "")}/${name}`; }

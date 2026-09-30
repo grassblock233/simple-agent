@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Archive, ChevronDown, Ellipsis, Folder, FolderOpen, Info, MessageCircle, Pin, PinOff, Settings2, Trash2, X } from "lucide-react";
+import { Archive, ChevronDown, Ellipsis, Folder, FolderOpen, Info, MessageCircle, Pin, PinOff, Plus, Settings2, Trash2, X } from "lucide-react";
 import type { Project, Session } from "@/lib/types";
 
 type Item = Pick<Session, "id" | "title" | "workspace" | "updatedAt" | "pinned">;
@@ -13,6 +13,7 @@ type Props = {
   pinSession: (id: string, pinned: boolean) => void; removeSession: (id: string) => void;
   action: (workspace: string, action: string, extra?: Record<string, unknown>) => Promise<void>;
   rename: (project: Project) => void;
+  createProject: () => void;
 };
 
 export default function SidebarList(props: Props) {
@@ -78,7 +79,7 @@ export default function SidebarList(props: Props) {
     </div></div>
   </div>;
   return <>
-    <nav className="session-list" aria-label="会话"><div className="sidebar-heading">项目</div>
+    <nav className="session-list" aria-label="会话"><div className="sidebar-heading project-heading"><span>项目</span><button className="icon-btn" title="创建项目" aria-label="创建项目" onClick={() => { close(); props.createProject(); }}><Plus size={16}/></button></div>
       {props.projects.map((project, index) => <div className="project-group" key={project.workspace}>
         <div className="project-row-wrap" {...bindings({kind: "project", project})}>
           <button className="project-row" aria-expanded={!props.collapsed.includes(project.workspace)} aria-controls={`project-sessions-${index}`} onClick={() => props.toggle(project.workspace)}><Folder size={18}/><span>{project.name}</span><ChevronDown size={14} className={`project-chevron ${props.collapsed.includes(project.workspace) ? "collapsed" : ""}`}/></button>

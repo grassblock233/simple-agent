@@ -42,4 +42,6 @@ export type Project = {
   pinned: boolean;
   hidden: boolean;
 };
+export type DirectorySelectionResult = { status: "selected"; path: string } | { status: "cancelled" | "unavailable" };
+export type ProjectCreationResult = { project: Project; session: Session };
 export type LiveEvent = { type: "event"; event: Event } | { type: "status"; status: string; occupancy?: number } | { type: "delta"; field: "answer" | "reasoning"; text: string } | { type: "done" };

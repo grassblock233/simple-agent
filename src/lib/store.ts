@@ -8,7 +8,34 @@ const sessionsDir = path.join(dataDir, "sessions");
 const imagesDir = path.join(dataDir, "images");
 const projectsFile = path.join(dataDir, "projects.json");
 const settingsFile = path.join(dataDir, "settings.json");
+const credentialsFile = path.join(dataDir, "credentials.key");
 const locks = new Map<string, Promise<void>>();
+
+export async function getStoredApiKey(): Promise<string> {
+  try {
+    const stored: unknown = JSON.parse(await readFile(credentialsFile, "utf8"));
+    if (!stored || typeof stored !== "object" || Array.isArray(stored) || typeof (stored as { apiKey?: unknown }).apiKey !== "string") throw new Error();
+    return (stored as { apiKey: string }).apiKey.trim();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return "";
+    throw new Error("无法读取 API Key 凭据文件，请检查文件格式和权限");
+  }
+}
+
+export async function saveStoredApiKey(value: string): Promise<void> {
+  return locked("credentials", async () => {
+    const temporary = path.join(dataDir, `.credentials-${randomUUID()}.key`);
+    try {
+      await mkdir(dataDir, { recursive: true });
+      await writeFile(temporary, JSON.stringify({ apiKey: value.trim() }), { mode: 0o600, flag: "wx" });
+      await rename(temporary, credentialsFile);
+    } catch {
+      throw new Error("无法保存 API Key，请检查数据目录权限和磁盘空间");
+    } finally {
+      await rm(temporary, { force: true }).catch(() => {});
+    }
+  });
+}
 
 export function imagePath(id: string): string {
   if (!/^[a-f0-9-]{36}$/.test(id)) throw new Error("图片 ID 无效");

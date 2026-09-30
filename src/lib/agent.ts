@@ -82,7 +82,8 @@ async function executeCall(call: ToolCall, run: ActiveRun, session: Session, rea
 
 export async function runAgent(sessionId: string, text: string, images: ImageRef[], emit: (value: LiveEvent) => void): Promise<void> {
   if (active.has(sessionId)) throw new Error("此会话已有运行中的任务");
-  if (!hasApiKey()) throw new Error("未配置 DeepSeek API Key，请在设置中填写");
+  if (!await hasApiKey()) throw new Error("未配置 DeepSeek API Key，请在设置中填写");
+  if (active.has(sessionId)) throw new Error("此会话已有运行中的任务");
   const run: ActiveRun = { controller: new AbortController(), sessionId };
   active.set(sessionId, run);
   try {

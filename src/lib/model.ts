@@ -1,11 +1,14 @@
-import { loadImage } from "./store";
+import { getStoredApiKey, loadImage } from "./store";
 import type { ChatMessage, ImageRef, ReasoningEffort, ToolCall } from "./types";
 
 let runtimeKey = "";
 export function setRuntimeKey(value: string): void { runtimeKey = value.trim(); }
-export function hasApiKey(): boolean { return Boolean(runtimeKey || process.env.DEEPSEEK_API_KEY); }
-function apiKey(): string {
-  const key = runtimeKey || process.env.DEEPSEEK_API_KEY;
+async function configuredApiKey(): Promise<string> {
+  return runtimeKey || await getStoredApiKey() || process.env.DEEPSEEK_API_KEY?.trim() || "";
+}
+export async function hasApiKey(): Promise<boolean> { return Boolean(await configuredApiKey()); }
+async function apiKey(): Promise<string> {
+  const key = await configuredApiKey();
   if (!key) throw new Error("未配置 DeepSeek API Key，请在设置中填写，或设置 DEEPSEEK_API_KEY");
   return key;
 }
@@ -45,7 +48,7 @@ async function request(body: object, signal: AbortSignal): Promise<Response> {
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       const response = await fetch(`${base.replace(/\/$/, "")}/chat/completions`, {
-        method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${apiKey()}` }, body: JSON.stringify(body), signal: AbortSignal.any([signal, AbortSignal.timeout(60000)]),
+        method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${await apiKey()}` }, body: JSON.stringify(body), signal: AbortSignal.any([signal, AbortSignal.timeout(60000)]),
       });
       if (response.ok) return response;
       const detail = await response.text();
