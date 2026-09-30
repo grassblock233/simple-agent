@@ -11,12 +11,16 @@ function compactInput(messages: ChatMessage[]): string {
 }
 
 export async function maybeCompact(session: Session, signal: AbortSignal, notify: (event: Event) => void): Promise<void> {
+  signal.throwIfAborted();
   const budget = contextBudget();
   const active = session.messages.slice(session.contextStart);
   if (estimateTokens(active, session.summary) < budget * session.settings.threshold) return;
   const userStarts = active.flatMap((item, index) => item.role === "user" ? [index] : []);
-  if (userStarts.length <= 3) return;
-  const cut = session.contextStart + userStarts[userStarts.length - 3];
+  if (userStarts.length <= 1) return;
+  let keepFrom = Math.max(1, userStarts.length - 3);
+  // Prefer three recent turns, but discard more complete turns when they exceed the budget.
+  while (keepFrom < userStarts.length - 1 && estimateTokens(active.slice(userStarts[keepFrom]), session.summary) > budget * 0.8) keepFrom++;
+  const cut = session.contextStart + userStarts[keepFrom];
   const old = session.messages.slice(session.contextStart, cut);
   if (!old.length) return;
   const input = compactInput(old);
@@ -28,6 +32,7 @@ export async function maybeCompact(session: Session, signal: AbortSignal, notify
       text = await completeText(`请用中文压缩以下代码 Agent 历史。保留用户目标和约束、已修改文件、测试命令及结果、失败原因、未完成事项。只输出摘要，不添加猜测。\n此前摘要:\n${session.summary}\n历史:\n${input.slice(0, 40000)}`, signal);
       if (!text) throw new Error("摘要为空");
     } catch {
+      signal.throwIfAborted();
       degraded = true;
       const firstGoal = old.find((item) => item.role === "user");
       text = `${session.summary.slice(0, 1500)}\n最初目标：${firstGoal?.role === "user" ? firstGoal.content.slice(0, 1000) : ""}\n近期历史：${input.slice(-4500)}`;
@@ -37,6 +42,8 @@ export async function maybeCompact(session: Session, signal: AbortSignal, notify
     const firstGoal = old.find((item) => item.role === "user");
     text = `${session.summary.slice(0, 1500)}\n最初目标：${firstGoal?.role === "user" ? firstGoal.content.slice(0, 1000) : ""}\n近期历史：${input.slice(-4500)}`;
   }
+  signal.throwIfAborted();
+  text = text.slice(0, Math.min(6000, Math.floor(budget * 0.2)));
   session.summary = text;
   session.contextStart = cut;
   const event = makeEvent("compression", { text, range, status: degraded ? "failed" : "success" });

@@ -10,7 +10,7 @@ import { detectImage, readText, validateImage, workspacePath, writeText } from "
 import { dangerousCommand, executeShell } from "../src/lib/shell";
 import { resolveApproval, runAgent, stopRun } from "../src/lib/agent";
 import { runTool } from "../src/lib/tools";
-import { setRuntimeKey, streamModel } from "../src/lib/model";
+import { estimateTokens, setRuntimeKey, streamModel } from "../src/lib/model";
 import type { LiveEvent } from "../src/lib/types";
 
 test("file tools reject traversal and symlink escapes", async () => {
@@ -120,6 +120,36 @@ function sse(deltas: object[]): Response {
   } });
   return new Response(stream, { status: 200, headers: { "Content-Type": "text/event-stream" } });
 }
+
+test("thinking requests retain reasoning on every historical assistant message", async () => {
+  const originalFetch = globalThis.fetch;
+  let messages: Array<{ role: string; reasoning_content?: string; images?: unknown }> = [];
+  globalThis.fetch = async (_input, init) => {
+    messages = JSON.parse(String(init?.body)).messages;
+    return sse([{ content: "继续" }]);
+  };
+  setRuntimeKey("test-key");
+  try {
+    await streamModel([
+      { role: "user", content: "第一轮", images: [] },
+      { role: "assistant", content: "旧会话回答" },
+      { role: "user", content: "关闭思考的一轮" },
+      { role: "assistant", content: "回答", reasoning_content: null },
+      { role: "user", content: "开启思考" },
+      { role: "assistant", content: "带思考的最终回答", reasoning_content: "完整思考" },
+      { role: "user", content: "继续" },
+    ], "high", new AbortController().signal, () => {});
+    assert.deepEqual(messages.filter((message) => message.role === "assistant").map((message) => message.reasoning_content), ["", "", "完整思考"]);
+    assert.ok(messages.every((message) => !("images" in message)));
+  } finally { globalThis.fetch = originalFetch; setRuntimeKey(""); }
+});
+
+test("context estimate counts Chinese, reasoning and image tokens", () => {
+  assert.ok(estimateTokens([{ role: "user", content: "中文".repeat(100) }]) > estimateTokens([{ role: "user", content: "ab".repeat(100) }]));
+  assert.ok(estimateTokens([{ role: "assistant", content: "回答", reasoning_content: "思考".repeat(100) }]) > 200);
+  const text = [{ role: "user" as const, content: "图片" }];
+  assert.ok(estimateTokens([{ ...text[0], images: [{ id: "test", name: "test.png", mime: "image/png" }] }]) - estimateTokens(text) >= 1024);
+});
 
 test("agent handles multiple streamed tool calls, approval and reasoning history", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "simple-agent-run-"));

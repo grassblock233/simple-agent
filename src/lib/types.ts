@@ -7,6 +7,7 @@ export type ChatMessage =
 
 export type ReasoningEffort = "off" | "low" | "high" | "max";
 export type SessionSettings = { reasoningEffort: ReasoningEffort; maxAttempts: number; compression: boolean; threshold: number };
+export type AppSettings = { sessionDefaults: SessionSettings };
 export type Event = {
   id: string;
   at: string;
@@ -32,5 +33,13 @@ export type Session = {
   contextStart: number;
   summary: string;
   events: Event[];
+  pinned: boolean;
+  archived: boolean;
+};
+export type Project = {
+  workspace: string;
+  name: string;
+  pinned: boolean;
+  hidden: boolean;
 };
 export type LiveEvent = { type: "event"; event: Event } | { type: "status"; status: string; occupancy?: number } | { type: "delta"; field: "answer" | "reasoning"; text: string } | { type: "done" };

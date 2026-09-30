@@ -21,7 +21,9 @@ export const toolDefinitions = [
 
 async function providerMessages(messages: ChatMessage[]): Promise<object[]> {
   return Promise.all(messages.map(async (message) => {
-    if (message.role !== "user" || !message.images?.length) return message;
+    if (message.role === "assistant") return { ...message, reasoning_content: message.reasoning_content ?? "" };
+    if (message.role !== "user") return message;
+    if (!message.images?.length) return { role: "user", content: message.content };
     const content: object[] = [{ type: "text", text: message.content }];
     for (const image of message.images) {
       const bytes = await loadImage(image.id);
@@ -113,7 +115,10 @@ export async function completeText(prompt: string, signal: AbortSignal, image?: 
 }
 
 export function estimateTokens(messages: ChatMessage[], summary = ""): number {
-  return Math.ceil((summary.length + JSON.stringify(messages).length) / 4) + messages.reduce((sum, item) => sum + (item.role === "user" ? (item.images?.length || 0) * 1024 : 0), 0);
+  const text = summary + JSON.stringify(messages);
+  let nonAscii = 0;
+  for (const character of text) if (character.charCodeAt(0) > 127) nonAscii += character.length;
+  return Math.ceil((text.length - nonAscii) / 4 + nonAscii) + messages.reduce((sum, item) => sum + (item.role === "user" ? (item.images?.length || 0) * 1024 : 0), 0);
 }
 
 export function imageRefs(messages: ChatMessage[]): ImageRef[] {

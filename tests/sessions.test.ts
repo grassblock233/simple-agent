@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { NextRequest } from "next/server";
 import { GET } from "../src/app/api/[...path]/route";
-import { createSession, deleteSession, getSession, saveSession } from "../src/lib/store";
+import { createSession, deleteSession, getProject, getSession, listProjects, saveSession, updateProject, updateSessionsForWorkspace } from "../src/lib/store";
 
 test("session history stays hidden until the first user message", async () => {
   const workspace = await mkdtemp(path.join(os.tmpdir(), "simple-agent-session-"));
@@ -36,5 +36,20 @@ test("legacy settings migrate and omit tool round limits", async () => {
     assert.equal(restored?.settings.reasoningEffort, "off");
     assert.equal("maxToolRounds" in (restored?.settings || {}), false);
     assert.equal("thinking" in (restored?.settings || {}), false);
+  } finally { await deleteSession(session.id); await rm(workspace, { recursive: true, force: true }); }
+});
+
+test("project metadata and session archive state persist", async () => {
+  const workspace = await mkdtemp(path.join(os.tmpdir(), "simple-agent-project-"));
+  const session = await createSession(workspace);
+  try {
+    session.messages.push({ role: "user", content: "任务" });
+    await saveSession(session);
+    await updateProject(workspace, { name: "演示项目", pinned: true });
+    const project = await getProject(workspace);
+    assert.deepEqual({ name: project.name, pinned: project.pinned, hidden: project.hidden }, { name: "演示项目", pinned: true, hidden: false });
+    assert.equal((await listProjects([workspace])).find((item) => item.workspace === workspace)?.name, "演示项目");
+    assert.equal(await updateSessionsForWorkspace(workspace, { archived: true }), 1);
+    assert.equal((await getSession(session.id))?.archived, true);
   } finally { await deleteSession(session.id); await rm(workspace, { recursive: true, force: true }); }
 });

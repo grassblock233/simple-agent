@@ -100,6 +100,7 @@ export async function runAgent(sessionId: string, text: string, images: ImageRef
       while (!run.controller.signal.aborted) {
         await maybeCompact(session, run.controller.signal, (event) => emit({ type: "event", event }));
         const occupancy = estimateTokens(session.messages.slice(session.contextStart), session.summary) / contextBudget();
+        if (occupancy >= 1) throw new Error("当前轮次已超过上下文预算，无法在不拆散工具调用的情况下继续。请新建会话并附上任务进展，或提高 CONTEXT_TOKEN_BUDGET（最高 1M）。");
         emit({ type: "status", status: "模型生成中", occupancy });
         const assistant = await streamModel(session.messages.slice(session.contextStart), session.settings.reasoningEffort, run.controller.signal, (delta) => {
           if (delta.content) emit({ type: "delta", field: "answer", text: delta.content });

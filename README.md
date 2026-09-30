@@ -14,7 +14,7 @@ npm run dev
 
 打开 `http://127.0.0.1:3000`。在 `.env.local` 填写 `DEEPSEEK_API_KEY`，或启动后在设置中填写 Key。后者仅保存在当前服务端进程内，重启后需要重新输入。没有 Key 时应用仍能启动、管理会话及浏览目录。
 
-默认模型固定为 `deepseek-flash`，思考模式默认开启。`DEEPSEEK_BASE_URL` 默认是 `https://api.deepseek.com`。`AGENT_DATA_DIR` 默认是项目下的 `.data`，保存会话 JSON 和上传图片；该目录已被 Git 忽略。`CONTEXT_TOKEN_BUDGET` 是本地压缩触发预算，默认 64000，并非模型实际 1M 上下文长度。`SHELL_TIMEOUT_MS` 默认 30000，限制在 1000–120000 毫秒。
+默认模型固定为 `deepseek-flash`，思考模式默认开启。`DEEPSEEK_BASE_URL` 默认是 `https://api.deepseek.com`。`AGENT_DATA_DIR` 默认是项目下的 `.data`，保存会话 JSON 和上传图片；该目录已被 Git 忽略。`CONTEXT_TOKEN_BUDGET` 是本地压缩触发预算，默认 1000000，与模型文档的 1M 上下文长度一致，可配置为 4000–1000000。界面显示的 token 用量是估算值，中文和思考内容均计入。`SHELL_TIMEOUT_MS` 默认 30000，限制在 1000–120000 毫秒。
 
 生产模式：
 

@@ -1,14 +1,16 @@
 "use client";
 
 import { isValidElement, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { AlertCircle, ArrowDown, Check, ChevronDown, ChevronLeft, ChevronRight, Clipboard, Code2, Eye, EyeOff, FilePenLine, FileText, Folder, GitBranch, Minus, PanelLeft, Plus, RotateCcw, Search, Settings2, Square, Terminal, Trash2, X } from "lucide-react";
+import { AlertCircle, ArrowDown, Check, ChevronDown, ChevronLeft, ChevronRight, Clipboard, Code2, FilePenLine, FileText, Folder, GitBranch, PanelLeft, Plus, RotateCcw, Search, Settings2, Square, Terminal, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
+import SidebarList from "./sidebar-list";
+import SettingsWorkbench from "./settings-workbench";
 import type { CSSProperties } from "react";
 import { sidebarDrag } from "@/lib/sidebar";
-import type { Event, ImageRef, LiveEvent, ReasoningEffort, Session, SessionSettings } from "@/lib/types";
+import type { Event, ImageRef, LiveEvent, Project, ReasoningEffort, Session, SessionSettings } from "@/lib/types";
 
-type SessionItem = Pick<Session, "id" | "title" | "workspace" | "createdAt" | "updatedAt"> & { hasMessages: boolean };
+type SessionItem = Pick<Session, "id" | "title" | "workspace" | "createdAt" | "updatedAt" | "pinned" | "archived"> & { hasMessages: boolean };
 type BrowserState = { path: string; parent: string; entries: string[] };
 type GitStatus = { isRepository: boolean; branch: string; branches: string[]; changedFiles: number };
 const effortLevels: ReasoningEffort[] = ["off", "low", "high", "max"];
@@ -67,27 +69,10 @@ function EventRow({ event, onApprove, running }: { event: Event; onApprove: (id:
   return <div className={`event notice-event ${event.type === "error" || event.status === "failed" ? "error" : ""}`}><AlertCircle size={16} /><span>{event.text}</span></div>;
 }
 
-function SettingStepper({ id, label, value, min, max, disabled, onChange }: { id: string; label: string; value: number; min: number; max: number; disabled: boolean; onChange: (value: number) => void }) {
-  const [draft, setDraft] = useState(String(value));
-  useEffect(() => { setDraft(String(value)); }, [value]);
-  const commit = () => {
-    const parsed = Number(draft);
-    if (!draft.trim() || !Number.isFinite(parsed)) { setDraft(String(value)); return; }
-    const next = Math.max(min, Math.min(max, Math.round(parsed)));
-    setDraft(String(next));
-    if (next !== value) onChange(next);
-  };
-  const step = (change: number) => {
-    const parsed = Number(draft);
-    const next = Math.max(min, Math.min(max, (Number.isInteger(parsed) ? parsed : value) + change));
-    setDraft(String(next));
-    if (next !== value) onChange(next);
-  };
-  return <div className="settings-number-row"><div><label htmlFor={id}>{label}</label><span>{min}–{max}</span></div><div className="settings-stepper"><button type="button" title={`${label}减少`} aria-label={`${label}减少`} disabled={disabled || value <= min} onClick={() => step(-1)}><Minus size={15} /></button><input id={id} type="number" inputMode="numeric" min={min} max={max} value={draft} disabled={disabled} onChange={(event) => setDraft(event.target.value)} onBlur={(event) => { if (!event.currentTarget.parentElement?.contains(event.relatedTarget as Node)) commit(); }} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }} /><button type="button" title={`${label}增加`} aria-label={`${label}增加`} disabled={disabled || value >= max} onClick={() => step(1)}><Plus size={15} /></button></div></div>;
-}
 
 export default function Home() {
   const [sessions, setSessions] = useState<SessionItem[]>([]);
+  const [projectMeta, setProjectMeta] = useState<Project[]>([]);
   const [selected, setSelected] = useState<Session | null>(null);
   const [events, setEvents] = useState<Event[]>([]);
   const [text, setText] = useState("");
@@ -95,7 +80,7 @@ export default function Home() {
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("就绪");
   const [occupancy, setOccupancy] = useState(0);
-  const [contextBudget, setContextBudget] = useState(64000);
+  const [contextBudget, setContextBudget] = useState(1000000);
   const [composerMenu, setComposerMenu] = useState<"project" | "branch" | "effort" | null>(null);
   const [projectQuery, setProjectQuery] = useState("");
   const [branchQuery, setBranchQuery] = useState("");
@@ -104,12 +89,9 @@ export default function Home() {
   const [draftAnswer, setDraftAnswer] = useState("");
   const [draftReasoning, setDraftReasoning] = useState("");
   const [showSettings, setShowSettings] = useState(false);
-  const [settingsTab, setSettingsTab] = useState<"connection" | "session">("connection");
-  const [showKey, setShowKey] = useState(false);
+  const [settingsInitial, setSettingsInitial] = useState<"general" | "connection">("general");
   const [settingsFeedback, setSettingsFeedback] = useState<{ kind: "success" | "error"; message: string } | null>(null);
-  const [savingKey, setSavingKey] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
-  const [thresholdDraft, setThresholdDraft] = useState(0.75);
   const [showNew, setShowNew] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarVisible, setSidebarVisible] = useState(true);
@@ -119,14 +101,17 @@ export default function Home() {
   const [searchQuery, setSearchQuery] = useState("");
   const [searchIndex, setSearchIndex] = useState(0);
   const [collapsedProjects, setCollapsedProjects] = useState<string[]>([]);
+  const [renameProject, setRenameProject] = useState<Project | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
   const [latestProject, setLatestProject] = useState("");
   const [creating, setCreating] = useState(false);
   const [browser, setBrowser] = useState<BrowserState | null>(null);
   const [directory, setDirectory] = useState("");
-  const [key, setKey] = useState("");
   const [hasKey, setHasKey] = useState(false);
   const [error, setError] = useState("");
   const bottom = useRef<HTMLDivElement>(null);
+  const timeline = useRef<HTMLDivElement>(null);
+  const chatScroll = useRef(0);
   const fileInput = useRef<HTMLInputElement>(null);
   const composerInput = useRef<HTMLTextAreaElement>(null);
   const composerArea = useRef<HTMLDivElement>(null);
@@ -135,8 +120,6 @@ export default function Home() {
   const effortTrigger = useRef<HTMLButtonElement>(null);
   const composerReturnFocus = useRef<HTMLButtonElement | null>(null);
   const searchInput = useRef<HTMLInputElement>(null);
-  const settingsDialog = useRef<HTMLElement>(null);
-  const settingsClose = useRef<HTMLButtonElement>(null);
   const settingsTrigger = useRef<HTMLButtonElement>(null);
   const settingsReturnFocus = useRef<HTMLElement | null>(null);
   const latestProjectRef = useRef("");
@@ -198,7 +181,13 @@ export default function Home() {
     };
   }, [resizingSidebar, resizeSidebar]);
 
-  const refreshList = useCallback(async () => setSessions(await api<SessionItem[]>("/api/sessions")), []);
+  const refreshProjects = useCallback(async () => {
+    setProjectMeta(await api<Project[]>("/api/projects"));
+  }, []);
+  const refreshList = useCallback(async () => {
+    const [list] = await Promise.all([api<SessionItem[]>("/api/sessions"), refreshProjects()]);
+    setSessions(list);
+  }, [refreshProjects]);
   const rememberProject = useCallback((workspace: string) => {
     latestProjectRef.current = workspace;
     setLatestProject(workspace);
@@ -215,8 +204,9 @@ export default function Home() {
   useEffect(() => {
     void (async () => {
       try {
-        const list = await api<SessionItem[]>("/api/sessions");
+        const [list, projectList] = await Promise.all([api<SessionItem[]>("/api/sessions"), api<Project[]>("/api/projects")]);
         setSessions(list);
+        setProjectMeta(projectList);
         const savedProject = window.localStorage.getItem("simple-agent:last-project");
         const initial = list.find((item) => item.workspace === savedProject) || list[0];
         if (initial) await load(initial.id, false);
@@ -226,7 +216,8 @@ export default function Home() {
       } catch (cause) { setError(String(cause)); }
     })();
   }, [load, rememberProject]);
-  useEffect(() => { bottom.current?.scrollIntoView({ behavior: "smooth" }); }, [events, draftAnswer, draftReasoning]);
+  useEffect(() => { if (!showSettings) bottom.current?.scrollIntoView({ behavior: "smooth" }); }, [events, draftAnswer, draftReasoning]);
+  useLayoutEffect(() => { if (!showSettings && timeline.current) timeline.current.scrollTop = chatScroll.current; }, [showSettings]);
   useEffect(() => { if (searchOpen) searchInput.current?.focus(); }, [searchOpen]);
   useLayoutEffect(() => {
     const resize = () => {
@@ -261,11 +252,9 @@ export default function Home() {
     document.addEventListener("keydown", escape);
     return () => { document.removeEventListener("pointerdown", close); document.removeEventListener("keydown", escape); };
   }, [composerMenu]);
-  useEffect(() => { if (selected) setThresholdDraft(selected.settings.threshold); }, [selected?.id, selected?.settings.threshold]);
   useEffect(() => { if (selected) setEffortDraft(effortLevels.indexOf(selected.settings.reasoningEffort)); }, [selected?.id, selected?.settings.reasoningEffort]);
   useEffect(() => {
     if (!showSettings) return;
-    settingsClose.current?.focus();
     return () => {
       const target = settingsReturnFocus.current;
       if (target?.isConnected && !target.closest("[inert]")) target.focus();
@@ -275,13 +264,14 @@ export default function Home() {
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        if (showSettings) return;
         event.preventDefault(); setSearchQuery(""); setSearchIndex(0); setSearchOpen(true);
       }
       if (event.key === "Escape") setSearchOpen(false);
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, []);
+  }, [showSettings]);
 
   const browse = async (target?: string) => {
     try {
@@ -290,8 +280,9 @@ export default function Home() {
     } catch (cause) { setError(String(cause)); }
   };
   const openSettings = () => {
+    chatScroll.current = timeline.current?.scrollTop || 0;
     settingsReturnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    setSettingsTab("connection"); setShowKey(false); setSettingsFeedback(null);
+    setSettingsInitial(hasKey ? "general" : "connection"); setSettingsFeedback(null); setComposerMenu(null); setSidebarOpen(false);
     setSearchOpen(false); setShowSettings(true);
   };
   const createIn = async (workspace: string) => {
@@ -323,6 +314,16 @@ export default function Home() {
       if (selected?.id === id) { if (list[0]) await load(list[0].id); else { setSelected(null); setEvents([]); } }
     } catch (cause) { setError(String(cause)); }
   };
+  const patchSessionMeta = async (id: string, patch: { pinned?: boolean; archived?: boolean }) => {
+    try { await api<Session>(`/api/sessions/${id}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) }); await refreshList(); if (selected?.id === id && patch.archived) { const next = sessions.find((item) => item.id !== id && !item.archived); if (next) await load(next.id); else { setSelected(null); setEvents([]); } } }
+    catch (cause) { setError(String(cause)); }
+  };
+  const projectAction = async (workspace: string, action: string, extra: Record<string, unknown> = {}) => {
+    try { await api(`/api/projects`, JsonBody({ workspace, action, ...extra })); await refreshList(); if (action === "remove" && selected?.workspace === workspace) { const next = sessions.find((item) => item.workspace !== workspace && !item.archived); if (next) await load(next.id); else { setSelected(null); setEvents([]); } } }
+    catch (cause) { setError(String(cause)); }
+  };
+  const beginRename = (project: Project) => { setRenameProject(project); setRenameDraft(project.name); };
+  const commitRename = async () => { if (!renameProject) return; await projectAction(renameProject.workspace, "rename", { name: renameDraft }); setRenameProject(null); };
   const upload = async (files: FileList | null) => {
     if (!files) return;
     try {
@@ -393,34 +394,21 @@ export default function Home() {
       const session = await api<Session>(`/api/sessions/${sessionId}`, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) });
       setSelected((current) => current?.id === sessionId ? session : current);
     } catch (cause) {
-      if (patch.threshold !== undefined) setThresholdDraft(selected.settings.threshold);
       setSelected((current) => current?.id === sessionId ? { ...current, settings: selected.settings } : current);
       setSettingsFeedback({ kind: "error", message: String(cause) });
     }
     finally { setSavingSettings(false); }
   };
-  const commitThreshold = () => {
-    if (selected && thresholdDraft !== selected.settings.threshold) void updateSettings({ threshold: thresholdDraft });
-  };
-  const saveKey = async () => {
-    if (!key.trim() || savingKey) return;
-    setSavingKey(true); setSettingsFeedback(null);
-    try {
-      const result = await api<{ hasApiKey: boolean }>("/api/config", JsonBody({ apiKey: key }));
-      setHasKey(result.hasApiKey); setKey(""); setShowKey(false);
-      setSettingsFeedback({ kind: "success", message: "API Key 已保存" }); setError("");
-    } catch (cause) { setSettingsFeedback({ kind: "error", message: String(cause) }); }
-    finally { setSavingKey(false); }
-  };
 
-  const historySessions = sessions.filter((item) => item.hasMessages);
-  const projects = sessions.filter((item, index) => sessions.findIndex((other) => other.workspace === item.workspace) === index);
+  const workspaceName = (path: string) => path.split("/").filter(Boolean).pop() || path;
+  const historySessions = sessions.filter((item) => item.hasMessages && !item.archived);
+  const projectByPath = new Map(projectMeta.map((project) => [project.workspace, project]));
+  const projects = Array.from(new Set(sessions.filter((item) => !item.archived).map((item) => item.workspace))).map((workspace) => projectByPath.get(workspace) || { workspace, name: workspaceName(workspace), pinned: false, hidden: false } satisfies Project).filter((project) => !project.hidden).sort((a, b) => Number(b.pinned) - Number(a.pinned) || a.name.localeCompare(b.name));
   const matchingProjects = projects.filter((item) => item.workspace.toLowerCase().includes(projectQuery.trim().toLowerCase()));
   const matchingBranches = (gitInfo?.isRepository ? Array.from(new Set([gitInfo.branch, ...gitInfo.branches])) : []).filter((branch) => branch.toLowerCase().includes(branchQuery.trim().toLowerCase()));
   const usedTokens = Math.max(0, Math.round(occupancy * contextBudget));
   const percentUsed = Math.round(occupancy * 100);
   const canSend = Boolean(text.trim() || images.length);
-  const workspaceName = (path: string) => path.split("/").filter(Boolean).pop() || path;
   const searchResults = historySessions.filter((item) => `${item.title} ${item.workspace}`.toLowerCase().includes(searchQuery.trim().toLowerCase())).slice(0, 8);
   const searchActions = [
     { label: "新聊天", icon: FilePenLine, run: () => { setSearchOpen(false); openNew(); } },
@@ -459,32 +447,24 @@ export default function Home() {
     }
   };
 
-  return <div className="app-shell">
-    <aside className={`sidebar ${sidebarOpen ? "open" : ""} ${sidebarVisible ? "" : "desktop-collapsed"} ${resizingSidebar ? "resizing" : ""}`} style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
+  return <div className={`app-shell ${showSettings ? "show-settings" : ""}`}>
+    <aside aria-hidden={showSettings} inert={showSettings} className={`sidebar ${sidebarOpen ? "open" : ""} ${sidebarVisible ? "" : "desktop-collapsed"} ${resizingSidebar ? "resizing" : ""}`} style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}>
       <div className="brand"><div><strong>Simple Agent</strong></div><button className="icon-btn sidebar-search-toggle" title="搜索会话 (Ctrl+K)" aria-label="搜索会话" onClick={() => { setSearchOpen(true); setSearchQuery(""); setSearchIndex(0); }}><Search size={18} /></button><button className="icon-btn mobile-only" title="关闭侧栏" onClick={() => setSidebarOpen(false)}><X size={18} /></button></div>
       <button className="new-button" onClick={openNew} disabled={creating} title={latestProject ? `在 ${workspaceName(latestProject)} 中新建聊天` : "新建聊天"}><FilePenLine size={18} /> 新聊天</button>
-      <nav className="session-list" aria-label="会话">
-        <div className="sidebar-heading">项目</div>
-        {projects.map((item, index) => <div className="project-group" key={item.workspace}>
-          <button className={`project-row ${latestProject === item.workspace ? "selected-project" : ""}`} onClick={() => toggleProject(item.workspace)} title={item.workspace} aria-expanded={!collapsedProjects.includes(item.workspace)} aria-controls={`project-sessions-${index}`}><Folder size={17} /><span>{workspaceName(item.workspace)}</span><ChevronDown size={15} className={`project-chevron ${collapsedProjects.includes(item.workspace) ? "collapsed" : ""}`} /></button>
-          <div id={`project-sessions-${index}`} className={`project-sessions ${collapsedProjects.includes(item.workspace) ? "collapsed" : ""}`} aria-hidden={collapsedProjects.includes(item.workspace)} inert={collapsedProjects.includes(item.workspace)}><div className="project-sessions-inner">
-            {historySessions.filter((session) => session.workspace === item.workspace).map((session) => <div key={session.id} className={`session-row project-session ${selected?.id === session.id ? "active" : ""}`}><button onClick={() => void load(session.id)} title={session.title}><span>{session.title}</span></button><button className="session-delete" title="删除会话" onClick={() => void removeSession(session.id)}><Trash2 size={14} /></button></div>)}
-          </div></div>
-        </div>)}
-        {historySessions.length > 0 && <><div className="sidebar-heading recent-heading">最近</div>{historySessions.slice(0, 5).map((item) => <div key={`recent-${item.id}`} className="session-row recent-session"><button onClick={() => void load(item.id)} title={item.title}><span>{item.title}</span></button></div>)}</>}
-      </nav>
+      <SidebarList projects={projects} sessions={historySessions} selectedId={selected?.id} collapsed={collapsedProjects} toggle={toggleProject} load={(id) => void load(id)} pinSession={(id, pinned) => void patchSessionMeta(id, { pinned })} removeSession={(id) => void removeSession(id)} action={projectAction} rename={beginRename} />
       <div className="sidebar-footer"><span className={`status-dot ${hasKey ? "ready" : ""}`} />{hasKey ? "DeepSeek 已配置" : "等待配置 API Key"}</div>
       <div className="sidebar-resizer" role="separator" aria-label="调整侧边栏宽度" aria-orientation="vertical" aria-valuemin={0} aria-valuemax={520} aria-valuenow={sidebarWidth} tabIndex={0} onPointerDown={(event) => { event.preventDefault(); closingSidebarRef.current = false; setResizingSidebar(true); }} onKeyDown={(event) => {
         if (event.key === "ArrowLeft" || event.key === "ArrowRight") { event.preventDefault(); resizeSidebar(sidebarWidthRef.current + (event.key === "ArrowRight" ? 20 : -20), true); }
         if (event.key === "Home") { event.preventDefault(); resizeSidebar(0, true); }
       }} />
     </aside>
-    <main className="main-pane">
+    <main className="main-pane" aria-hidden={showSettings} inert={showSettings}>
       <header className="topbar"><button className="icon-btn sidebar-toggle" title="切换侧边栏" aria-label="切换侧边栏" onClick={toggleSidebar}><PanelLeft size={19} /></button><div className="topbar-title">{selected && <strong>{selected.title}</strong>}</div><div className="topbar-right"><button ref={settingsTrigger} className="icon-btn" title="设置" aria-label="设置" onClick={openSettings}><Settings2 size={18} /></button></div></header>
       {error && <div className="global-error"><AlertCircle size={17} />{error}<button title="关闭提示" onClick={() => setError("")}><X size={16} /></button></div>}
-      <div className="timeline">
+      <div className="timeline" ref={timeline}>
         {!selected ? <div className="empty-state"><div className="empty-icon"><Code2 size={29} /></div><h1>你想让我们构建什么？</h1><button className="btn primary" onClick={openNew} disabled={creating}><Plus size={16} /> 新聊天</button></div> : events.length === 0 ? <div className="empty-state"><div className="empty-icon"><Code2 size={29} /></div><h1>你想在 <span>{workspaceName(selected.workspace)}</span> 中构建什么？</h1></div> : <div className="event-list">{events.map((event) => <EventRow key={event.id} event={event} onApprove={approve} running={busy} />)}{draftReasoning && <div className="event compact-event streaming"><div className="disclosure">思考中…</div><pre className="detail-text">{draftReasoning}</pre></div>}{draftAnswer && <div className="event answer-event streaming"><div className="event-label">AGENT</div><div className="markdown"><Markdown text={draftAnswer} /></div></div>}<div ref={bottom} /></div>}
       </div>
+      {renameProject && <div className="rename-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setRenameProject(null); }}><div className="rename-dialog"><h2>编辑项目</h2><label htmlFor="project-name">项目名称</label><input id="project-name" value={renameDraft} onChange={(event) => setRenameDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void commitRename(); if (event.key === "Escape") setRenameProject(null); }} autoFocus /><div className="rename-actions"><button className="btn" onClick={() => setRenameProject(null)}>取消</button><button className="btn primary" onClick={() => void commitRename()}>保存</button></div></div></div>}
       {selected && <div ref={composerArea} className="composer-area">
         {events.length === 0 && <div className="composer-context">
           <div className="composer-menu-anchor">
@@ -536,50 +516,7 @@ export default function Home() {
         </div>
       </section>
     </div>
-    <div className={`settings-backdrop ${showSettings ? "open" : ""}`} aria-hidden={!showSettings} inert={!showSettings} onMouseDown={(event) => { if (event.target === event.currentTarget) setShowSettings(false); }}>
-      <section ref={settingsDialog} className="settings-dialog" role="dialog" aria-modal="true" aria-labelledby="settings-title" onKeyDown={(event) => {
-        if (event.key === "Escape") { event.stopPropagation(); setShowSettings(false); }
-        if (event.key !== "Tab") return;
-        const focusable = Array.from(settingsDialog.current?.querySelectorAll<HTMLElement>("button:not(:disabled), input:not(:disabled)") || []).filter((item) => item.offsetParent !== null);
-        if (!focusable.length) return;
-        if (event.shiftKey && document.activeElement === focusable[0]) { event.preventDefault(); focusable[focusable.length - 1].focus(); }
-        else if (!event.shiftKey && document.activeElement === focusable[focusable.length - 1]) { event.preventDefault(); focusable[0].focus(); }
-      }}>
-        <header className="settings-head"><h2 id="settings-title">设置</h2><button ref={settingsClose} className="settings-close" title="关闭设置" aria-label="关闭设置" onClick={() => setShowSettings(false)}><X size={19} /></button></header>
-        <div className="settings-tabs" role="tablist" aria-label="设置分类" onKeyDown={(event) => {
-          if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
-          const tabs = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("[role=tab]"));
-          const current = tabs.indexOf(event.target as HTMLButtonElement);
-          if (current < 0) return;
-          event.preventDefault();
-          const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (current + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
-          setSettingsTab(next === 0 ? "connection" : "session"); setSettingsFeedback(null); tabs[next].focus();
-        }}>
-          <button id="settings-tab-connection" role="tab" tabIndex={settingsTab === "connection" ? 0 : -1} aria-selected={settingsTab === "connection"} aria-controls="settings-panel-connection" className={settingsTab === "connection" ? "active" : ""} onClick={() => { setSettingsTab("connection"); setSettingsFeedback(null); }}>模型连接</button>
-          <button id="settings-tab-session" role="tab" tabIndex={settingsTab === "session" ? 0 : -1} aria-selected={settingsTab === "session"} aria-controls="settings-panel-session" className={settingsTab === "session" ? "active" : ""} onClick={() => { setSettingsTab("session"); setSettingsFeedback(null); }}>当前会话</button>
-        </div>
-        <div className={`settings-content ${savingSettings ? "saving" : ""}`}>
-          {settingsFeedback && <div className={`settings-feedback ${settingsFeedback.kind}`} role={settingsFeedback.kind === "error" ? "alert" : "status"}>{settingsFeedback.kind === "error" ? <AlertCircle size={17} /> : <Check size={17} />}{settingsFeedback.message}</div>}
-          <div id="settings-panel-connection" role="tabpanel" aria-labelledby="settings-tab-connection" hidden={settingsTab !== "connection"}>
-            <div className="settings-model-row"><div><span>模型</span><strong>deepseek-flash</strong></div><span className={`settings-key-status ${hasKey ? "configured" : ""}`}>{hasKey ? "已配置" : "未配置密钥"}</span></div>
-            <form className="settings-key-form" onSubmit={(event) => { event.preventDefault(); void saveKey(); }}>
-              <label htmlFor="api-key">DeepSeek API Key</label>
-              <div className="settings-key-row"><div className="settings-key-input"><input id="api-key" type={showKey ? "text" : "password"} autoComplete="off" value={key} onChange={(event) => { setKey(event.target.value); setSettingsFeedback(null); }} placeholder={hasKey ? "输入新 Key 以替换" : "sk-..."} /><button type="button" title={showKey ? "隐藏密钥" : "显示密钥"} aria-label={showKey ? "隐藏密钥" : "显示密钥"} onClick={() => setShowKey((current) => !current)}>{showKey ? <EyeOff size={17} /> : <Eye size={17} />}</button></div><button className="settings-save" type="submit" disabled={!key.trim() || savingKey}>{savingKey ? "保存中…" : "保存"}</button></div>
-              <p>密钥仅存于服务端进程内。重启后需重新填写，或使用环境变量。</p>
-            </form>
-          </div>
-          <div id="settings-panel-session" role="tabpanel" aria-labelledby="settings-tab-session" hidden={settingsTab !== "session"}>
-            {selected ? <><div className="settings-session-name" title={selected.title}>{selected.title}</div>
-              <div className="settings-reasoning-row"><div><strong>思考强度</strong><span>控制模型处理复杂任务时的思考量</span></div><strong>{effortLabels[selected.settings.reasoningEffort]}</strong></div>
-              <label className="settings-switch-row"><div><strong>上下文压缩</strong><span>达到阈值后保留关键任务信息</span></div><input type="checkbox" checked={selected.settings.compression} disabled={busy || savingSettings} onChange={(event) => void updateSettings({ compression: event.target.checked })} /><span className="settings-switch" aria-hidden="true" /></label>
-              <SettingStepper id="attempts" label="失败尝试上限" value={selected.settings.maxAttempts} min={1} max={10} disabled={busy || savingSettings} onChange={(value) => void updateSettings({ maxAttempts: value })} />
-              <div className="settings-threshold"><div><label htmlFor="threshold">压缩阈值</label><output htmlFor="threshold">{Math.round(thresholdDraft * 100)}%</output></div><input id="threshold" type="range" min="0.1" max="0.95" step="0.05" disabled={busy || savingSettings} value={thresholdDraft} onChange={(event) => setThresholdDraft(Number(event.target.value))} onPointerUp={commitThreshold} onKeyUp={commitThreshold} onBlur={commitThreshold} /></div>
-            </> : <div className="settings-no-session">新建会话后可调整会话设置。</div>}
-          </div>
-        </div>
-        <footer className="settings-footer"><AlertCircle size={17} /><p>批准 Shell 命令后，它将以当前用户权限运行，可能访问工作区外资源。请先核对命令。</p></footer>
-      </section>
-    </div>
+    {showSettings && <SettingsWorkbench initialCategory={settingsInitial} session={selected} sessions={sessions} projects={projectMeta} busy={busy} hasKey={hasKey} close={() => setShowSettings(false)} updated={value => setSelected(current => current?.id === value.id ? value : current)} restored={async () => { await refreshList(); const config = await api<{ hasApiKey: boolean }>("/api/config"); setHasKey(config.hasApiKey); }} />}
     {showNew && <div className="modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowNew(false); }}><div className="directory-modal"><div className="modal-head"><div><span className="eyebrow">工作区</span><h2>新建会话</h2></div><button className="icon-btn" title="关闭" onClick={() => setShowNew(false)}><X size={18} /></button></div><p>选择已有本机目录。文件工具仅在该目录内读写，Shell 命令逐条请求批准。</p><label htmlFor="directory-path">目录绝对路径</label><div className="path-row"><input id="directory-path" value={directory} onChange={(event) => setDirectory(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") void browse(); }} placeholder="/home/user/project" /><button className="btn" onClick={() => void browse()}>浏览</button></div>{error && <div className="inline-error"><AlertCircle size={15} />{error}</div>}{browser && <div className="folder-list"><button onClick={() => void browse(browser.parent)}><ChevronLeft size={16} /> 上一级</button>{browser.entries.map((name) => <button key={name} onClick={() => void browse(pathJoin(browser.path, name))}><Folder size={16} />{name}<ChevronRight size={14} /></button>)}{browser.entries.length === 0 && <span className="muted">此目录没有子目录</span>}</div>}<div className="modal-actions"><button className="btn" onClick={() => setShowNew(false)}>取消</button><button className="btn primary" disabled={!directory.trim()} onClick={() => void newSession()}><Check size={16} /> 使用此目录</button></div></div></div>}
   </div>;
 }

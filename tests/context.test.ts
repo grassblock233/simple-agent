@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { maybeCompact } from "../src/lib/context";
 import { createSession, deleteSession, saveSession } from "../src/lib/store";
-import { setRuntimeKey } from "../src/lib/model";
+import { estimateTokens, setRuntimeKey } from "../src/lib/model";
 import type { ChatMessage } from "../src/lib/types";
 
 test("compression cuts only between complete user turns", async () => {
@@ -68,5 +68,71 @@ test("disabled compression keeps the initial goal in a visible fallback summary"
     else process.env.CONTEXT_TOKEN_BUDGET = originalBudget;
     await deleteSession(session.id);
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("compression can release oversized history with only two user turns", async () => {
+  const session = await createSession(os.tmpdir());
+  const originalBudget = process.env.CONTEXT_TOKEN_BUDGET;
+  process.env.CONTEXT_TOKEN_BUDGET = "4000";
+  try {
+    session.settings.compression = false;
+    session.messages = [
+      { role: "user", content: "修复错误" },
+      { role: "assistant", content: "历史".repeat(5000), reasoning_content: "原始思考" },
+      { role: "user", content: "继续" },
+    ];
+    await maybeCompact(session, new AbortController().signal, () => {});
+    assert.equal(session.contextStart, 2);
+    assert.ok(estimateTokens(session.messages.slice(session.contextStart), session.summary) < 4000);
+    assert.equal(session.messages[1].role === "assistant" && session.messages[1].reasoning_content, "原始思考");
+  } finally {
+    if (originalBudget === undefined) delete process.env.CONTEXT_TOKEN_BUDGET;
+    else process.env.CONTEXT_TOKEN_BUDGET = originalBudget;
+    await deleteSession(session.id);
+  }
+});
+
+test("cancelled summarization leaves context and history unchanged", async () => {
+  const session = await createSession(os.tmpdir());
+  const originalBudget = process.env.CONTEXT_TOKEN_BUDGET;
+  const originalFetch = globalThis.fetch;
+  process.env.CONTEXT_TOKEN_BUDGET = "4000";
+  const controller = new AbortController();
+  setRuntimeKey("test-key");
+  globalThis.fetch = async () => { controller.abort(); throw new Error("aborted"); };
+  try {
+    session.messages = [{ role: "user", content: "目标".repeat(5000) }, { role: "assistant", content: "完成" }, { role: "user", content: "继续" }];
+    await assert.rejects(maybeCompact(session, controller.signal, () => {}), { name: "AbortError" });
+    assert.equal(session.contextStart, 0);
+    assert.equal(session.summary, "");
+    assert.equal(session.events.length, 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+    if (originalBudget === undefined) delete process.env.CONTEXT_TOKEN_BUDGET;
+    else process.env.CONTEXT_TOKEN_BUDGET = originalBudget;
+    setRuntimeKey("");
+    await deleteSession(session.id);
+  }
+});
+
+test("compression retains fewer turns when three turns cannot fit", async () => {
+  const session = await createSession(os.tmpdir());
+  const originalBudget = process.env.CONTEXT_TOKEN_BUDGET;
+  process.env.CONTEXT_TOKEN_BUDGET = "4000";
+  try {
+    session.settings.compression = false;
+    for (let index = 0; index < 4; index++) {
+      session.messages.push({ role: "user", content: `目标 ${index}` }, { role: "assistant", content: "长历史".repeat(800) });
+    }
+    session.messages.push({ role: "user", content: "继续处理最后的问题" });
+    await maybeCompact(session, new AbortController().signal, () => {});
+    assert.equal(session.contextStart, 6);
+    assert.ok(session.summary.length <= 800);
+    assert.ok(estimateTokens(session.messages.slice(session.contextStart), session.summary) < 4000);
+  } finally {
+    if (originalBudget === undefined) delete process.env.CONTEXT_TOKEN_BUDGET;
+    else process.env.CONTEXT_TOKEN_BUDGET = originalBudget;
+    await deleteSession(session.id);
   }
 });
